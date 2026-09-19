@@ -26,37 +26,10 @@ pve_guardian:addSkills { "qingguo", "fankui" }
 -- excludes hidden generals — so our two custom generals would never be
 -- dealt. Override chooseGenerals to deal directly from a local pool.
 -- Modeled on rougelike1v1/logic.lua; no shop/talent/draw-pile machinery.
-local test_pve_mode_logic = GameLogic:subclass("test_pve_mode_logic")
-
-function test_pve_mode_logic:chooseGenerals()
-  local room = self.room
-  local lord = room:getLord()
-  room:setCurrent(lord)
-  local players = room.players
-
-  -- The only two generals this mode ever deals.
-  local pool = { "pve_warrior", "pve_guardian" }
-
-  local req = Request:new(players, "AskForGeneral")
-  req.timeout = room:getSettings('generalTimeout')
-  for _, p in ipairs(players) do
-    -- offer both custom generals to each player; pick 1
-    req:setData(p, { pool, 1 })
-    -- robot / idle-player default: a random general from the pool
-    req:setDefaultReply(p, { pool[math.random(1, #pool)] })
-  end
-  req:ask()
-
-  for _, p in ipairs(players) do
-    local chosen = req:getResult(p)[1]
-    room:setPlayerGeneral(p, chosen, true, true)
-  end
-
-  room:askToChooseKingdom(players)
-  for _, p in ipairs(players) do
-    room:broadcastProperty(p, "general")
-  end
-end
+--
+-- GameLogic is not available at package-load time, so the subclass is built
+-- lazily on the first game start (when mode.logic() is called) and cached.
+local _logic_cls
 
 local test_pve_mode = fk.CreateGameMode {
   name = "test_pve_mode",
@@ -67,7 +40,39 @@ local test_pve_mode = fk.CreateGameMode {
   -- the draw pile. The custom chooseGenerals restricts generals; cards stay
   -- available via the default buildDrawPile.
   logic = function()
-    return test_pve_mode_logic
+    if not _logic_cls then
+      _logic_cls = GameLogic:subclass("test_pve_mode_logic")
+      function _logic_cls:chooseGenerals()
+        local room = self.room
+        local lord = room:getLord()
+        room:setCurrent(lord)
+        local players = room.players
+
+        -- The only two generals this mode ever deals.
+        local pool = { "pve_warrior", "pve_guardian" }
+
+        local req = Request:new(players, "AskForGeneral")
+        req.timeout = room:getSettings('generalTimeout')
+        for _, p in ipairs(players) do
+          -- offer both custom generals to each player; pick 1
+          req:setData(p, { pool, 1 })
+          -- robot / idle-player default: a random general from the pool
+          req:setDefaultReply(p, { pool[math.random(1, #pool)] })
+        end
+        req:ask()
+
+        for _, p in ipairs(players) do
+          local chosen = req:getResult(p)[1]
+          room:setPlayerGeneral(p, chosen, true, true)
+        end
+
+        room:askToChooseKingdom(players)
+        for _, p in ipairs(players) do
+          room:broadcastProperty(p, "general")
+        end
+      end
+    end
+    return _logic_cls
   end,
 }
 extension:addGameMode(test_pve_mode)
