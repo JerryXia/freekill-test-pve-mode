@@ -21,10 +21,12 @@ local pve_guardian = General(extension, "pve_guardian", "wei", 4, 4)
 pve_guardian.hidden = true
 pve_guardian:addSkills { "qingguo", "fankui" }
 
--- Custom game logic. The default GameLogic:chooseGenerals draws from
--- room.general_pile (built by makeGeneralPile via canUseGeneral), which
--- excludes hidden generals — so our two custom generals would never be
--- dealt. Override chooseGenerals to deal directly from a local pool.
+-- Custom game logic. Selection is split:
+--  - Humans select rougelike1v1-style: draw from the standard general pile
+--    (room:getNGenerals) and pick 1 via AskForGeneral. The custom generals
+--    are hidden, so they never appear in the human's pile.
+--  - Robots are assigned a random general from the mode's custom pool
+--    {pve_warrior, pve_guardian} directly (setPlayerGeneral ignores `hidden`).
 -- Modeled on rougelike1v1/logic.lua; no shop/talent/draw-pile machinery.
 --
 -- GameLogic is not available at package-load time, so the subclass is built
@@ -48,21 +50,49 @@ local test_pve_mode = fk.CreateGameMode {
         room:setCurrent(lord)
         local players = room.players
 
-        -- The only two generals this mode ever deals.
-        local pool = { "pve_warrior", "pve_guardian" }
-
-        local req = Request:new(players, "AskForGeneral")
-        req.timeout = room:getSettings('generalTimeout')
+        -- Robots have negative ids.
+        local humans, robots = {}, {}
         for _, p in ipairs(players) do
-          -- offer both custom generals to each player; pick 1
-          req:setData(p, { pool, 1 })
-          -- robot / idle-player default: a random general from the pool
-          req:setDefaultReply(p, { pool[math.random(1, #pool)] })
+          if p.id < 0 then
+            table.insert(robots, p)
+          else
+            table.insert(humans, p)
+          end
         end
-        req:ask()
 
-        for _, p in ipairs(players) do
-          local chosen = req:getResult(p)[1]
+        local custom_pool = { "pve_warrior", "pve_guardian" }
+
+        -- Humans: rougelike1v1-style — draw from the standard general pile
+        -- and pick 1 via AskForGeneral (custom generals are hidden, so they
+        -- never appear in this pile).
+        if #humans > 0 then
+          local generalNum = room:getSettings('generalNum')
+          local generals = room:getNGenerals(#humans * generalNum)
+          local req = Request:new(humans, "AskForGeneral")
+          req.timeout = room:getSettings('generalTimeout')
+          for i, p in ipairs(humans) do
+            local arg = table.slice(generals, (i - 1) * generalNum + 1, i * generalNum + 1)
+            req:setData(p, { arg, 1 })
+            req:setDefaultReply(p, { arg[1] })
+          end
+          req:ask()
+          local selected = {}
+          for _, p in ipairs(humans) do
+            local chosen = req:getResult(p)[1]
+            room:setPlayerGeneral(p, chosen, true, true)
+            table.insertIfNeed(selected, chosen)
+          end
+          local unchosen = table.filter(generals, function(g) return not table.contains(selected, g) end)
+          room:returnToGeneralPile(unchosen)
+          for _, g in ipairs(selected) do
+            room:findGeneral(g)
+          end
+        end
+
+        -- Robots: random from the custom pool (assigned directly; setPlayerGeneral
+        -- does not check `hidden`, so hidden custom generals can be assigned).
+        for _, p in ipairs(robots) do
+          local chosen = custom_pool[math.random(1, #custom_pool)]
           room:setPlayerGeneral(p, chosen, true, true)
         end
 
